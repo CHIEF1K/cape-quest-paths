@@ -15,6 +15,11 @@ const buttonVariants = cva(
         secondary: "bg-secondary text-secondary-foreground hover:bg-secondary/80",
         ghost: "hover:bg-accent hover:text-accent-foreground",
         link: "text-primary underline-offset-4 hover:underline",
+        // Cape Town tourism variants
+        ocean: "bg-gradient-ocean text-white hover:shadow-ocean transition-all duration-300",
+        sunset: "bg-gradient-sunset text-white hover:shadow-sunset transition-all duration-300",
+        tracking: "bg-wine text-white hover:bg-wine/90 shadow-lg transition-all duration-300",
+        floating: "bg-white/90 backdrop-blur-sm text-primary border border-ocean/20 hover:bg-white hover:shadow-floating transition-all duration-300",
       },
       size: {
         default: "h-10 px-4 py-2",
