@@ -1,16 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react';
-import mapboxgl from 'mapbox-gl';
-import 'mapbox-gl/dist/mapbox-gl.css';
+import L from 'leaflet';
+import 'leaflet/dist/leaflet.css';
 import { hiddenGems, categoryColors, categoryIcons, type HiddenGem } from '@/data/hiddenGems';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import CategoryFilter from '@/components/CategoryFilter';
-import { MapPin, Play, Square, Navigation, RotateCcw, Download } from 'lucide-react';
-
-interface MapComponentProps {
-  mapboxToken: string;
-}
+import { MapPin, Play, Square, Navigation, RotateCcw, Locate } from 'lucide-react';
 
 interface TrackedPath {
   id: string;
@@ -19,17 +15,31 @@ interface TrackedPath {
   timestamp: number;
 }
 
-const MapComponent: React.FC<MapComponentProps> = ({ mapboxToken }) => {
+const LeafletMap: React.FC = () => {
   const mapContainer = useRef<HTMLDivElement>(null);
-  const map = useRef<mapboxgl.Map | null>(null);
+  const map = useRef<L.Map | null>(null);
   const [isTracking, setIsTracking] = useState(false);
   const [currentPath, setCurrentPath] = useState<[number, number][]>([]);
   const [selectedGem, setSelectedGem] = useState<HiddenGem | null>(null);
   const [savedPaths, setSavedPaths] = useState<TrackedPath[]>([]);
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
   const [filteredGems, setFilteredGems] = useState<HiddenGem[]>(hiddenGems);
+  const [userLocation, setUserLocation] = useState<[number, number] | null>(null);
   const watchId = useRef<number | null>(null);
-  const markers = useRef<mapboxgl.Marker[]>([]);
+  const markers = useRef<L.Marker[]>([]);
+  const currentPathLine = useRef<L.Polyline | null>(null);
+  const userMarker = useRef<L.Marker | null>(null);
+
+  // Fix Leaflet default markers
+  useEffect(() => {
+    // Fix for default markers in Leaflet with Vite
+    delete (L.Icon.Default.prototype as any)._getIconUrl;
+    L.Icon.Default.mergeOptions({
+      iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png',
+      iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png',
+      shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
+    });
+  }, []);
 
   // Load saved paths from localStorage
   useEffect(() => {
@@ -57,47 +67,69 @@ const MapComponent: React.FC<MapComponentProps> = ({ mapboxToken }) => {
 
   // Initialize map
   useEffect(() => {
-    if (!mapContainer.current || !mapboxToken) return;
+    if (!mapContainer.current) return;
 
-    mapboxgl.accessToken = mapboxToken;
-    
-    map.current = new mapboxgl.Map({
-      container: mapContainer.current,
-      style: 'mapbox://styles/mapbox/light-v11',
-      center: [18.4241, -33.9249], // Cape Town coordinates
+    // Create map
+    map.current = L.map(mapContainer.current, {
+      center: [-33.9249, 18.4241], // Cape Town coordinates
       zoom: 11,
-      pitch: 30,
+      zoomControl: false
     });
 
-    // Add navigation controls
-    map.current.addControl(
-      new mapboxgl.NavigationControl({
-        visualizePitch: true,
-      }),
-      'top-right'
-    );
+    // Add zoom control to top right
+    L.control.zoom({ position: 'topright' }).addTo(map.current);
 
-    // Add geolocate control
-    const geolocate = new mapboxgl.GeolocateControl({
-      positionOptions: {
-        enableHighAccuracy: true
-      },
-      trackUserLocation: true,
-      showUserHeading: true
-    });
-    map.current.addControl(geolocate, 'top-right');
+    // Add tile layer (OpenStreetMap)
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+    }).addTo(map.current);
 
-    // Initialize map content
-    map.current.on('load', () => {
-      updateMarkersOnMap();
-      loadSavedPaths();
-    });
+    // Add scale control
+    L.control.scale({ position: 'bottomright' }).addTo(map.current);
+
+    // Initialize markers and saved paths
+    updateMarkersOnMap();
+    loadSavedPaths();
 
     return () => {
-      markers.current.forEach(marker => marker.remove());
-      map.current?.remove();
+      if (map.current) {
+        map.current.remove();
+        map.current = null;
+      }
     };
-  }, [mapboxToken]);
+  }, []);
+
+  // Create custom icon for gems
+  const createGemIcon = (category: string) => {
+    const color = categoryColors[category as keyof typeof categoryColors];
+    const icon = categoryIcons[category as keyof typeof categoryIcons];
+    
+    return L.divIcon({
+      html: `
+        <div style="
+          width: 40px; 
+          height: 40px; 
+          background-color: ${color}; 
+          border: 3px solid white;
+          border-radius: 50%; 
+          display: flex; 
+          align-items: center; 
+          justify-content: center; 
+          font-size: 18px;
+          box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+          cursor: pointer;
+          transform: translateZ(0);
+          transition: transform 0.2s ease;
+        " 
+        onmouseover="this.style.transform='scale(1.1)'" 
+        onmouseout="this.style.transform='scale(1)'"
+        >${icon}</div>
+      `,
+      className: 'gem-marker',
+      iconSize: [40, 40],
+      iconAnchor: [20, 20],
+    });
+  };
 
   // Update markers on map based on filtered gems
   const updateMarkersOnMap = () => {
@@ -107,29 +139,16 @@ const MapComponent: React.FC<MapComponentProps> = ({ mapboxToken }) => {
     markers.current.forEach(marker => marker.remove());
     markers.current = [];
 
-    // Add new markers
+    // Add new markers for filtered gems
     filteredGems.forEach((gem) => {
-      const markerElement = document.createElement('div');
-      markerElement.className = 'gem-marker';
-      markerElement.innerHTML = `
-        <div class="w-10 h-10 rounded-full flex items-center justify-center text-white shadow-lg cursor-pointer transform hover:scale-110 transition-all duration-300 border-2 border-white" 
-             style="background-color: ${categoryColors[gem.category]}">
-          <span class="text-lg">${categoryIcons[gem.category]}</span>
-        </div>
-      `;
+      const marker = L.marker([gem.latitude, gem.longitude], {
+        icon: createGemIcon(gem.category)
+      }).addTo(map.current!);
 
-      markerElement.addEventListener('click', () => {
+      marker.on('click', () => {
         setSelectedGem(gem);
-        map.current?.flyTo({
-          center: [gem.longitude, gem.latitude],
-          zoom: 15,
-          essential: true
-        });
+        map.current?.setView([gem.latitude, gem.longitude], 15, { animate: true });
       });
-
-      const marker = new mapboxgl.Marker(markerElement)
-        .setLngLat([gem.longitude, gem.latitude])
-        .addTo(map.current!);
 
       markers.current.push(marker);
     });
@@ -139,41 +158,64 @@ const MapComponent: React.FC<MapComponentProps> = ({ mapboxToken }) => {
   const loadSavedPaths = () => {
     if (!map.current) return;
 
-    savedPaths.forEach((path, index) => {
+    savedPaths.forEach((path) => {
       if (path.coordinates.length > 1) {
-        const sourceId = `saved-path-${index}`;
-        const layerId = `saved-path-layer-${index}`;
-
-        if (!map.current?.getSource(sourceId)) {
-          map.current?.addSource(sourceId, {
-            type: 'geojson',
-            data: {
-              type: 'Feature',
-              properties: {},
-              geometry: {
-                type: 'LineString',
-                coordinates: path.coordinates
-              }
-            }
-          });
-
-          map.current?.addLayer({
-            id: layerId,
-            type: 'line',
-            source: sourceId,
-            layout: {
-              'line-join': 'round',
-              'line-cap': 'round'
-            },
-            paint: {
-              'line-color': '#94A3B8',
-              'line-width': 3,
-              'line-opacity': 0.7
-            }
-          });
-        }
+        // Convert coordinates to Leaflet format [lat, lng]
+        const leafletCoords: [number, number][] = path.coordinates.map(coord => [coord[1], coord[0]]);
+        
+        L.polyline(leafletCoords, {
+          color: '#94A3B8',
+          weight: 3,
+          opacity: 0.7
+        }).addTo(map.current!);
       }
     });
+  };
+
+  // Get user location
+  const getUserLocation = () => {
+    if (!navigator.geolocation) {
+      alert('Geolocation is not supported by this browser.');
+      return;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const coords: [number, number] = [position.coords.latitude, position.coords.longitude];
+        setUserLocation(coords);
+        
+        if (map.current) {
+          map.current.setView(coords, 15, { animate: true });
+          
+          // Add or update user marker
+          if (userMarker.current) {
+            userMarker.current.setLatLng(coords);
+          } else {
+            userMarker.current = L.marker(coords, {
+              icon: L.divIcon({
+                html: `
+                  <div style="
+                    width: 20px; 
+                    height: 20px; 
+                    background-color: #3B82F6; 
+                    border: 3px solid white;
+                    border-radius: 50%; 
+                    box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+                  "></div>
+                `,
+                className: 'user-location-marker',
+                iconSize: [20, 20],
+                iconAnchor: [10, 10],
+              })
+            }).addTo(map.current);
+          }
+        }
+      },
+      (error) => {
+        console.error('Location error:', error);
+        alert('Unable to get your location. Please check your GPS settings.');
+      }
+    );
   };
 
   // Start GPS tracking
@@ -188,16 +230,37 @@ const MapComponent: React.FC<MapComponentProps> = ({ mapboxToken }) => {
 
     watchId.current = navigator.geolocation.watchPosition(
       (position) => {
-        const newCoord: [number, number] = [
-          position.coords.longitude,
-          position.coords.latitude
-        ];
+        const newCoord: [number, number] = [position.coords.longitude, position.coords.latitude];
+        const leafletCoord: [number, number] = [position.coords.latitude, position.coords.longitude];
 
         setCurrentPath(prev => {
           const updated = [...prev, newCoord];
           updateMapPath(updated);
           return updated;
         });
+
+        // Update user location marker
+        if (userMarker.current) {
+          userMarker.current.setLatLng(leafletCoord);
+        } else {
+          userMarker.current = L.marker(leafletCoord, {
+            icon: L.divIcon({
+              html: `
+                <div style="
+                  width: 20px; 
+                  height: 20px; 
+                  background-color: #EF4444; 
+                  border: 3px solid white;
+                  border-radius: 50%; 
+                  box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+                "></div>
+              `,
+              className: 'user-tracking-marker',
+              iconSize: [20, 20],
+              iconAnchor: [10, 10],
+            })
+          }).addTo(map.current!);
+        }
       },
       (error) => {
         console.error('GPS tracking error:', error);
@@ -231,52 +294,27 @@ const MapComponent: React.FC<MapComponentProps> = ({ mapboxToken }) => {
       const updatedPaths = [...savedPaths, newPath];
       setSavedPaths(updatedPaths);
       localStorage.setItem('capetown-paths', JSON.stringify(updatedPaths));
+      
+      // Add the completed path to the map
+      loadSavedPaths();
     }
   };
 
-  // Update path on map
+  // Update current path on map
   const updateMapPath = (coordinates: [number, number][]) => {
     if (!map.current || coordinates.length < 2) return;
 
-    const sourceId = 'current-path';
-    const layerId = 'current-path-layer';
+    // Convert to Leaflet format [lat, lng]
+    const leafletCoords: [number, number][] = coordinates.map(coord => [coord[1], coord[0]]);
 
-    if (map.current.getSource(sourceId)) {
-      (map.current.getSource(sourceId) as mapboxgl.GeoJSONSource).setData({
-        type: 'Feature',
-        properties: {},
-        geometry: {
-          type: 'LineString',
-          coordinates: coordinates
-        }
-      });
+    if (currentPathLine.current) {
+      currentPathLine.current.setLatLngs(leafletCoords);
     } else {
-      map.current.addSource(sourceId, {
-        type: 'geojson',
-        data: {
-          type: 'Feature',
-          properties: {},
-          geometry: {
-            type: 'LineString',
-            coordinates: coordinates
-          }
-        }
-      });
-
-      map.current.addLayer({
-        id: layerId,
-        type: 'line',
-        source: sourceId,
-        layout: {
-          'line-join': 'round',
-          'line-cap': 'round'
-        },
-        paint: {
-          'line-color': '#EF4444',
-          'line-width': 4,
-          'line-opacity': 0.8
-        }
-      });
+      currentPathLine.current = L.polyline(leafletCoords, {
+        color: '#EF4444',
+        weight: 4,
+        opacity: 0.8
+      }).addTo(map.current);
     }
   };
 
@@ -294,9 +332,9 @@ const MapComponent: React.FC<MapComponentProps> = ({ mapboxToken }) => {
   // Reset current path
   const resetCurrentPath = () => {
     setCurrentPath([]);
-    if (map.current?.getSource('current-path')) {
-      map.current.removeLayer('current-path-layer');
-      map.current.removeSource('current-path');
+    if (currentPathLine.current) {
+      currentPathLine.current.remove();
+      currentPathLine.current = null;
     }
   };
 
@@ -306,7 +344,7 @@ const MapComponent: React.FC<MapComponentProps> = ({ mapboxToken }) => {
       <div ref={mapContainer} className="absolute inset-0" />
       
       {/* Category Filter */}
-      <div className="absolute top-4 left-4 z-10 w-80 max-w-[90vw]">
+      <div className="absolute top-4 left-4 z-[1000] w-80 max-w-[90vw]">
         <CategoryFilter 
           selectedCategories={selectedCategories}
           onCategoryToggle={handleCategoryToggle}
@@ -314,7 +352,7 @@ const MapComponent: React.FC<MapComponentProps> = ({ mapboxToken }) => {
       </div>
       
       {/* Tracking Controls */}
-      <div className="absolute bottom-4 left-4 z-10 space-y-2">
+      <div className="absolute bottom-4 left-4 z-[1000] space-y-2">
         <Card className="shadow-floating">
           <CardContent className="p-4">
             <div className="flex items-center gap-2 mb-2">
@@ -335,6 +373,14 @@ const MapComponent: React.FC<MapComponentProps> = ({ mapboxToken }) => {
                     Start Tracking
                   </>
                 )}
+              </Button>
+              <Button 
+                variant="outline"
+                size="sm"
+                onClick={getUserLocation}
+                className="text-xs"
+              >
+                <Locate className="w-3 h-3" />
               </Button>
               {currentPath.length > 0 && (
                 <Button 
@@ -364,7 +410,7 @@ const MapComponent: React.FC<MapComponentProps> = ({ mapboxToken }) => {
 
       {/* Hidden Gem Details */}
       {selectedGem && (
-        <div className="absolute bottom-4 left-1/2 transform -translate-x-1/2 z-10 w-96 max-w-[90vw]">
+        <div className="absolute bottom-4 left-1/2 transform -translate-x-1/2 z-[1000] w-96 max-w-[90vw]">
           <Card className="shadow-floating border-0 bg-white/95 backdrop-blur-sm">
             <CardContent className="p-4">
               <div className="flex items-start justify-between gap-3">
@@ -386,11 +432,7 @@ const MapComponent: React.FC<MapComponentProps> = ({ mapboxToken }) => {
                     variant="floating" 
                     size="sm"
                     onClick={() => {
-                      map.current?.flyTo({
-                        center: [selectedGem.longitude, selectedGem.latitude],
-                        zoom: 16,
-                        essential: true
-                      });
+                      map.current?.setView([selectedGem.latitude, selectedGem.longitude], 16, { animate: true });
                     }}
                   >
                     <Navigation className="w-4 h-4" />
@@ -412,7 +454,7 @@ const MapComponent: React.FC<MapComponentProps> = ({ mapboxToken }) => {
 
       {/* Saved Paths Info */}
       {savedPaths.length > 0 && (
-        <div className="absolute top-4 right-4 z-10 w-64">
+        <div className="absolute top-4 right-4 z-[1000] w-64">
           <Card className="shadow-floating">
             <CardContent className="p-4">
               <h3 className="font-semibold text-primary mb-2 flex items-center gap-2">
@@ -438,7 +480,7 @@ const MapComponent: React.FC<MapComponentProps> = ({ mapboxToken }) => {
       )}
 
       {/* Gems Counter */}
-      <div className="absolute top-20 left-4 z-10">
+      <div className="absolute top-20 left-4 z-[1000]">
         <Card className="shadow-floating">
           <CardContent className="p-3">
             <p className="text-sm font-medium text-primary">
@@ -451,4 +493,4 @@ const MapComponent: React.FC<MapComponentProps> = ({ mapboxToken }) => {
   );
 };
 
-export default MapComponent;
+export default LeafletMap;
