@@ -1,270 +1,280 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import { hiddenGems, categoryColors, categoryIcons, type HiddenGem } from '@/data/hiddenGems';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import CategoryFilter from '@/components/CategoryFilter';
-import { MapPin, Play, Square, Navigation, RotateCcw, Locate } from 'lucide-react';
+import { MapPin, Play, Square, RotateCcw, Navigation, Award } from 'lucide-react';
+import { hiddenGems, categoryColors, categoryIcons, HiddenGem } from '@/data/hiddenGems';
+import CategoryFilter from './CategoryFilter';
+import SearchBar from './SearchBar';
+import RouteSharing from './RouteSharing';
+import InstallPrompt from './InstallPrompt';
+import { usePWA } from '@/hooks/usePWA';
+import { useToast } from '@/hooks/use-toast';
 
-interface TrackedPath {
+// Define interfaces for route data
+interface RouteData {
   id: string;
   name: string;
-  coordinates: [number, number][];
-  timestamp: number;
+  path: [number, number][];
+  distance: number;
+  duration: number;
+  createdAt: string;
+  visitedGems: string[];
 }
 
+// Fix Leaflet default markers
+delete (L.Icon.Default.prototype as any)._getIconUrl;
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png',
+  iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png',
+  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
+});
+
 const LeafletMap: React.FC = () => {
-  const mapContainer = useRef<HTMLDivElement>(null);
-  const map = useRef<L.Map | null>(null);
+  const mapRef = useRef<L.Map | null>(null);
+  const mapContainerRef = useRef<HTMLDivElement>(null);
   const [isTracking, setIsTracking] = useState(false);
   const [currentPath, setCurrentPath] = useState<[number, number][]>([]);
   const [selectedGem, setSelectedGem] = useState<HiddenGem | null>(null);
-  const [savedPaths, setSavedPaths] = useState<TrackedPath[]>([]);
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
-  const [filteredGems, setFilteredGems] = useState<HiddenGem[]>(hiddenGems);
   const [userLocation, setUserLocation] = useState<[number, number] | null>(null);
-  const watchId = useRef<number | null>(null);
-  const markers = useRef<L.Marker[]>([]);
-  const currentPathLine = useRef<L.Polyline | null>(null);
-  const userMarker = useRef<L.Marker | null>(null);
+  const [savedPaths, setSavedPaths] = useState<RouteData[]>([]);
+  const [visitedGems, setVisitedGems] = useState<Set<string>>(new Set());
+  const [showInstallPrompt, setShowInstallPrompt] = useState(true);
+  const { isInstallable, isInstalled } = usePWA();
+  const { toast } = useToast();
 
-  // Fix Leaflet default markers
+  const watchIdRef = useRef<number | null>(null);
+  const currentPathLineRef = useRef<L.Polyline | null>(null);
+  
   useEffect(() => {
-    // Fix for default markers in Leaflet with Vite
-    delete (L.Icon.Default.prototype as any)._getIconUrl;
-    L.Icon.Default.mergeOptions({
-      iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png',
-      iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png',
-      shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
-    });
-  }, []);
+    if (!mapContainerRef.current || mapRef.current) return;
 
-  // Load saved paths from localStorage
-  useEffect(() => {
-    const saved = localStorage.getItem('capetown-paths');
-    if (saved) {
-      setSavedPaths(JSON.parse(saved));
-    }
-  }, []);
+    mapRef.current = L.map(mapContainerRef.current).setView([-33.9249, 18.4241], 12);
 
-  // Filter gems based on selected categories
-  useEffect(() => {
-    if (selectedCategories.length === 0) {
-      setFilteredGems(hiddenGems);
-    } else {
-      setFilteredGems(hiddenGems.filter(gem => selectedCategories.includes(gem.category)));
-    }
-  }, [selectedCategories]);
-
-  // Update markers when filtered gems change
-  useEffect(() => {
-    if (map.current) {
-      updateMarkersOnMap();
-    }
-  }, [filteredGems]);
-
-  // Initialize map
-  useEffect(() => {
-    if (!mapContainer.current) return;
-
-    // Create map
-    map.current = L.map(mapContainer.current, {
-      center: [-33.9249, 18.4241], // Cape Town coordinates
-      zoom: 11,
-      zoomControl: false
-    });
-
-    // Add zoom control to top right
-    L.control.zoom({ position: 'topright' }).addTo(map.current);
-
-    // Add tile layer (OpenStreetMap)
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-    }).addTo(map.current);
+      attribution: '© OpenStreetMap contributors'
+    }).addTo(mapRef.current);
 
-    // Add scale control
-    L.control.scale({ position: 'bottomright' }).addTo(map.current);
-
-    // Initialize markers and saved paths
-    updateMarkersOnMap();
+    // Load saved data
     loadSavedPaths();
-
+    loadVisitedGems();
+    
     return () => {
-      if (map.current) {
-        map.current.remove();
-        map.current = null;
+      if (mapRef.current) {
+        mapRef.current.remove();
+        mapRef.current = null;
       }
     };
   }, []);
 
-  // Create custom icon for gems
-  const createGemIcon = (category: string) => {
-    const color = categoryColors[category as keyof typeof categoryColors];
-    const icon = categoryIcons[category as keyof typeof categoryIcons];
+  useEffect(() => {
+    updateMarkersOnMap();
+  }, [selectedCategories, visitedGems]);
+
+  const loadSavedPaths = useCallback(() => {
+    const saved = localStorage.getItem('capeTownPaths');
+    if (saved) {
+      const paths = JSON.parse(saved);
+      setSavedPaths(paths);
+      
+      if (mapRef.current) {
+        paths.forEach((pathData: RouteData) => {
+          if (pathData.path && pathData.path.length > 0) {
+            const polyline = L.polyline(pathData.path, { 
+              color: '#10b981', 
+              weight: 3,
+              opacity: 0.7
+            }).addTo(mapRef.current!);
+            
+            polyline.bindPopup(`
+              <strong>${pathData.name}</strong><br>
+              Distance: ${pathData.distance.toFixed(1)} km<br>
+              Duration: ${Math.round(pathData.duration / 60)} min<br>
+              Gems visited: ${pathData.visitedGems.length}
+            `);
+          }
+        });
+      }
+    }
+  }, []);
+
+  const loadVisitedGems = useCallback(() => {
+    const visited = localStorage.getItem('visitedGems');
+    if (visited) {
+      setVisitedGems(new Set(JSON.parse(visited)));
+    }
+  }, []);
+
+  const saveVisitedGem = (gemId: string) => {
+    const newVisited = new Set(visitedGems);
+    newVisited.add(gemId);
+    setVisitedGems(newVisited);
+    localStorage.setItem('visitedGems', JSON.stringify([...newVisited]));
+    
+    toast({
+      title: "Gem Discovered! 💎",
+      description: "You've collected a new hidden gem!",
+    });
+  };
+
+  const createGemIcon = (category: keyof typeof categoryColors, isVisited: boolean = false) => {
+    const color = categoryColors[category];
+    const icon = categoryIcons[category];
+    const opacity = isVisited ? 0.7 : 1;
+    const borderColor = isVisited ? '#ffd700' : '#ffffff';
     
     return L.divIcon({
       html: `
         <div style="
-          width: 40px; 
-          height: 40px; 
           background-color: ${color}; 
-          border: 3px solid white;
+          width: 30px; 
+          height: 30px; 
           border-radius: 50%; 
+          border: 3px solid ${borderColor}; 
           display: flex; 
           align-items: center; 
           justify-content: center; 
-          font-size: 18px;
-          box-shadow: 0 4px 12px rgba(0,0,0,0.3);
-          cursor: pointer;
-          transform: translateZ(0);
-          transition: transform 0.2s ease;
-        " 
-        onmouseover="this.style.transform='scale(1.1)'" 
-        onmouseout="this.style.transform='scale(1)'"
-        >${icon}</div>
+          font-size: 14px;
+          opacity: ${opacity};
+          box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+          ${isVisited ? 'animation: pulse 2s infinite;' : ''}
+        ">
+          ${icon}
+        </div>
       `,
-      className: 'gem-marker',
-      iconSize: [40, 40],
-      iconAnchor: [20, 20],
+      className: '',
+      iconSize: [30, 30],
+      iconAnchor: [15, 15]
     });
   };
 
-  // Update markers on map based on filtered gems
-  const updateMarkersOnMap = () => {
-    if (!map.current) return;
+  const updateMarkersOnMap = useCallback(() => {
+    if (!mapRef.current) return;
 
-    // Remove existing markers
-    markers.current.forEach(marker => marker.remove());
-    markers.current = [];
+    // Clear existing gem markers
+    mapRef.current.eachLayer((layer) => {
+      if (layer instanceof L.Marker && (layer as any).isGemMarker) {
+        mapRef.current!.removeLayer(layer);
+      }
+    });
 
-    // Add new markers for filtered gems
-    filteredGems.forEach((gem) => {
-      const marker = L.marker([gem.latitude, gem.longitude], {
-        icon: createGemIcon(gem.category)
-      }).addTo(map.current!);
+    // Filter gems based on selected categories
+    const gemsToShow = selectedCategories.length === 0 
+      ? hiddenGems 
+      : hiddenGems.filter(gem => selectedCategories.includes(gem.category));
 
+    // Add markers for filtered gems
+    gemsToShow.forEach(gem => {
+      const isVisited = visitedGems.has(gem.id);
+      const icon = createGemIcon(gem.category, isVisited);
+      const marker = L.marker([gem.latitude, gem.longitude], { icon })
+        .addTo(mapRef.current!);
+      
+      (marker as any).isGemMarker = true;
+      
       marker.on('click', () => {
         setSelectedGem(gem);
-        map.current?.setView([gem.latitude, gem.longitude], 15, { animate: true });
-      });
-
-      markers.current.push(marker);
-    });
-  };
-
-  // Load saved paths on map
-  const loadSavedPaths = () => {
-    if (!map.current) return;
-
-    savedPaths.forEach((path) => {
-      if (path.coordinates.length > 1) {
-        // Convert coordinates to Leaflet format [lat, lng]
-        const leafletCoords: [number, number][] = path.coordinates.map(coord => [coord[1], coord[0]]);
-        
-        L.polyline(leafletCoords, {
-          color: '#94A3B8',
-          weight: 3,
-          opacity: 0.7
-        }).addTo(map.current!);
-      }
-    });
-  };
-
-  // Get user location
-  const getUserLocation = () => {
-    if (!navigator.geolocation) {
-      alert('Geolocation is not supported by this browser.');
-      return;
-    }
-
-    navigator.geolocation.getCurrentPosition(
-      (position) => {
-        const coords: [number, number] = [position.coords.latitude, position.coords.longitude];
-        setUserLocation(coords);
-        
-        if (map.current) {
-          map.current.setView(coords, 15, { animate: true });
-          
-          // Add or update user marker
-          if (userMarker.current) {
-            userMarker.current.setLatLng(coords);
-          } else {
-            userMarker.current = L.marker(coords, {
-              icon: L.divIcon({
-                html: `
-                  <div style="
-                    width: 20px; 
-                    height: 20px; 
-                    background-color: #3B82F6; 
-                    border: 3px solid white;
-                    border-radius: 50%; 
-                    box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-                  "></div>
-                `,
-                className: 'user-location-marker',
-                iconSize: [20, 20],
-                iconAnchor: [10, 10],
-              })
-            }).addTo(map.current);
+        if (userLocation) {
+          const distance = calculateDistance(userLocation[0], userLocation[1], gem.latitude, gem.longitude);
+          if (distance < 0.1) { // Within 100 meters
+            saveVisitedGem(gem.id);
           }
         }
-      },
-      (error) => {
-        console.error('Location error:', error);
-        alert('Unable to get your location. Please check your GPS settings.');
-      }
-    );
+      });
+    });
+  }, [selectedCategories, visitedGems, userLocation]);
+
+  const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number) => {
+    const R = 6371; // Radius of the Earth in kilometers
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = 
+      Math.sin(dLat/2) * Math.sin(dLat/2) +
+      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
+      Math.sin(dLon/2) * Math.sin(dLon/2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    return R * c;
   };
 
-  // Start GPS tracking
+  const getUserLocation = () => {
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          const { latitude, longitude } = position.coords;
+          setUserLocation([latitude, longitude]);
+          
+          if (mapRef.current) {
+            mapRef.current.setView([latitude, longitude], 15);
+            
+            // Add or update user location marker
+            mapRef.current.eachLayer((layer) => {
+              if ((layer as any).isUserMarker) {
+                mapRef.current!.removeLayer(layer);
+              }
+            });
+            
+            const userMarker = L.marker([latitude, longitude], {
+              icon: L.divIcon({
+                html: '<div style="background-color: #3b82f6; width: 20px; height: 20px; border-radius: 50%; border: 3px solid white; box-shadow: 0 2px 8px rgba(0,0,0,0.3);"></div>',
+                className: '',
+                iconSize: [20, 20],
+                iconAnchor: [10, 10]
+              })
+            }).addTo(mapRef.current);
+            
+            (userMarker as any).isUserMarker = true;
+            userMarker.bindPopup('Your Location');
+          }
+        },
+        (error) => {
+          console.error('Geolocation error:', error);
+          toast({
+            title: "Location Error",
+            description: "Unable to get your location. Please check permissions.",
+            variant: "destructive",
+          });
+        }
+      );
+    }
+  };
+
   const startTracking = () => {
     if (!navigator.geolocation) {
-      alert('Geolocation is not supported by this browser.');
+      toast({
+        title: "Geolocation Not Supported",
+        description: "Your device doesn't support GPS tracking.",
+        variant: "destructive",
+      });
       return;
     }
 
     setIsTracking(true);
     setCurrentPath([]);
+    localStorage.setItem('trackingStartTime', Date.now().toString());
 
-    watchId.current = navigator.geolocation.watchPosition(
+    watchIdRef.current = navigator.geolocation.watchPosition(
       (position) => {
-        const newCoord: [number, number] = [position.coords.longitude, position.coords.latitude];
-        const leafletCoord: [number, number] = [position.coords.latitude, position.coords.longitude];
-
+        const newCoord: [number, number] = [position.coords.latitude, position.coords.longitude];
+        
         setCurrentPath(prev => {
           const updated = [...prev, newCoord];
           updateMapPath(updated);
           return updated;
         });
 
-        // Update user location marker
-        if (userMarker.current) {
-          userMarker.current.setLatLng(leafletCoord);
-        } else {
-          userMarker.current = L.marker(leafletCoord, {
-            icon: L.divIcon({
-              html: `
-                <div style="
-                  width: 20px; 
-                  height: 20px; 
-                  background-color: #EF4444; 
-                  border: 3px solid white;
-                  border-radius: 50%; 
-                  box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-                "></div>
-              `,
-              className: 'user-tracking-marker',
-              iconSize: [20, 20],
-              iconAnchor: [10, 10],
-            })
-          }).addTo(map.current!);
-        }
+        // Update user location
+        setUserLocation(newCoord);
       },
       (error) => {
         console.error('GPS tracking error:', error);
-        alert('Unable to get location. Please check your GPS settings.');
+        toast({
+          title: "GPS Error",
+          description: "Unable to track location. Check GPS settings.",
+          variant: "destructive",
+        });
       },
       {
         enableHighAccuracy: true,
@@ -274,51 +284,79 @@ const LeafletMap: React.FC = () => {
     );
   };
 
-  // Stop GPS tracking
   const stopTracking = () => {
-    if (watchId.current) {
-      navigator.geolocation.clearWatch(watchId.current);
-      watchId.current = null;
-    }
+    if (!isTracking || currentPath.length === 0) return;
 
     setIsTracking(false);
 
-    if (currentPath.length > 1) {
-      const newPath: TrackedPath = {
-        id: Date.now().toString(),
-        name: `Cape Town Route ${new Date().toLocaleDateString()}`,
-        coordinates: currentPath,
-        timestamp: Date.now()
-      };
-
-      const updatedPaths = [...savedPaths, newPath];
-      setSavedPaths(updatedPaths);
-      localStorage.setItem('capetown-paths', JSON.stringify(updatedPaths));
-      
-      // Add the completed path to the map
-      loadSavedPaths();
+    if (watchIdRef.current) {
+      navigator.geolocation.clearWatch(watchIdRef.current);
+      watchIdRef.current = null;
     }
+
+    // Calculate total distance
+    let totalDistance = 0;
+    for (let i = 1; i < currentPath.length; i++) {
+      const prev = currentPath[i - 1];
+      const curr = currentPath[i];
+      totalDistance += calculateDistance(prev[0], prev[1], curr[0], curr[1]);
+    }
+
+    // Create route data
+    const routeData: RouteData = {
+      id: Date.now().toString(),
+      name: `Route ${new Date().toLocaleDateString()}`,
+      path: [...currentPath],
+      distance: totalDistance,
+      duration: Date.now() - parseInt(localStorage.getItem('trackingStartTime') || '0'),
+      createdAt: new Date().toISOString(),
+      visitedGems: [...visitedGems]
+    };
+
+    // Save to localStorage
+    const existingPaths = JSON.parse(localStorage.getItem('capeTownPaths') || '[]');
+    existingPaths.push(routeData);
+    localStorage.setItem('capeTownPaths', JSON.stringify(existingPaths));
+    setSavedPaths(existingPaths);
+
+    // Display the path permanently on the map
+    if (mapRef.current && currentPath.length > 0) {
+      const polyline = L.polyline(currentPath, { 
+        color: '#10b981', 
+        weight: 3,
+        opacity: 0.7
+      }).addTo(mapRef.current);
+      
+      polyline.bindPopup(`
+        <strong>${routeData.name}</strong><br>
+        Distance: ${totalDistance.toFixed(1)} km<br>
+        Duration: ${Math.round(routeData.duration / 60)} min<br>
+        Gems visited: ${routeData.visitedGems.length}
+      `);
+    }
+
+    toast({
+      title: "Route Saved! 🎉",
+      description: `${totalDistance.toFixed(1)}km route saved with ${visitedGems.size} gems discovered`,
+    });
   };
 
-  // Update current path on map
-  const updateMapPath = (coordinates: [number, number][]) => {
-    if (!map.current || coordinates.length < 2) return;
+  const updateMapPath = (path: [number, number][]) => {
+    if (!mapRef.current || path.length < 2) return;
 
-    // Convert to Leaflet format [lat, lng]
-    const leafletCoords: [number, number][] = coordinates.map(coord => [coord[1], coord[0]]);
-
-    if (currentPathLine.current) {
-      currentPathLine.current.setLatLngs(leafletCoords);
+    if (currentPathLineRef.current) {
+      currentPathLineRef.current.setLatLngs(path);
     } else {
-      currentPathLine.current = L.polyline(leafletCoords, {
-        color: '#EF4444',
+      currentPathLineRef.current = L.polyline(path, {
+        color: '#ef4444',
         weight: 4,
         opacity: 0.8
-      }).addTo(map.current);
+      }).addTo(mapRef.current);
+      
+      (currentPathLineRef.current as any).isCurrentPath = true;
     }
   };
 
-  // Category filter handler
   const handleCategoryToggle = (category: string) => {
     setSelectedCategories(prev => {
       if (prev.includes(category)) {
@@ -329,122 +367,141 @@ const LeafletMap: React.FC = () => {
     });
   };
 
-  // Reset current path
-  const resetCurrentPath = () => {
-    setCurrentPath([]);
-    if (currentPathLine.current) {
-      currentPathLine.current.remove();
-      currentPathLine.current = null;
+  const handleGemSelect = (gem: HiddenGem) => {
+    setSelectedGem(gem);
+    if (mapRef.current) {
+      mapRef.current.setView([gem.latitude, gem.longitude], 16);
     }
   };
 
+  const getTotalStats = () => {
+    const totalDistance = savedPaths.reduce((sum, path) => sum + path.distance, 0);
+    const totalGems = visitedGems.size;
+    const totalRoutes = savedPaths.length;
+    
+    return { totalDistance, totalGems, totalRoutes };
+  };
+
+  const stats = getTotalStats();
+
   return (
-    <div className="relative w-full h-screen">
-      {/* Map Container */}
-      <div ref={mapContainer} className="absolute inset-0" />
-      
-      {/* Category Filter */}
-      <div className="absolute top-4 left-4 z-[1000] w-80 max-w-[90vw]">
-        <CategoryFilter 
+    <div className="h-screen w-full flex flex-col relative">
+      {/* Header with search */}
+      <div className="absolute top-4 left-4 right-4 z-50 space-y-3">
+        <div className="flex gap-3">
+          <SearchBar 
+            gems={hiddenGems} 
+            onGemSelect={handleGemSelect}
+            userLocation={userLocation}
+          />
+          <Button
+            onClick={getUserLocation}
+            variant="outline"
+            size="icon"
+            className="flex-shrink-0 bg-background/80 backdrop-blur"
+          >
+            <Navigation className="h-4 w-4" />
+          </Button>
+        </div>
+        
+        <CategoryFilter
           selectedCategories={selectedCategories}
           onCategoryToggle={handleCategoryToggle}
         />
       </div>
       
-      {/* Tracking Controls */}
-      <div className="absolute bottom-4 left-4 z-[1000] space-y-2">
-        <Card className="shadow-floating">
-          <CardContent className="p-4">
-            <div className="flex items-center gap-2 mb-2">
-              <Button 
-                variant={isTracking ? "tracking" : "ocean"}
-                size="sm"
+      {/* Map Container */}
+      <div ref={mapContainerRef} className="flex-1" />
+
+      {/* Controls Panel */}
+      <div className="absolute bottom-4 left-4 z-50">
+        <Card className="bg-background/80 backdrop-blur">
+          <CardContent className="p-4 space-y-3">
+            <div className="flex gap-2">
+              <Button
                 onClick={isTracking ? stopTracking : startTracking}
-                className="min-w-[120px]"
+                variant={isTracking ? "destructive" : "default"}
+                size="sm"
+                className="flex-1"
               >
                 {isTracking ? (
                   <>
-                    <Square className="w-4 h-4" />
-                    Stop Tracking
+                    <Square className="mr-2 h-4 w-4" />
+                    Stop
                   </>
                 ) : (
                   <>
-                    <Play className="w-4 h-4" />
-                    Start Tracking
+                    <Play className="mr-2 h-4 w-4" />
+                    Track
                   </>
                 )}
               </Button>
-              <Button 
+              
+              <Button
+                onClick={() => setCurrentPath([])}
                 variant="outline"
                 size="sm"
-                onClick={getUserLocation}
-                className="text-xs"
+                disabled={currentPath.length === 0}
               >
-                <Locate className="w-3 h-3" />
+                <RotateCcw className="h-4 w-4" />
               </Button>
-              {currentPath.length > 0 && (
-                <Button 
-                  variant="outline"
-                  size="sm"
-                  onClick={resetCurrentPath}
-                  className="text-xs"
-                >
-                  <RotateCcw className="w-3 h-3" />
-                </Button>
-              )}
             </div>
-            {isTracking && (
-              <div className="flex items-center gap-1 text-sm text-muted-foreground mb-1">
-                <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse" />
-                Recording path...
+            
+            {/* Stats */}
+            <div className="space-y-1 text-xs">
+              <div className="flex items-center gap-2">
+                <Award className="h-3 w-3" />
+                <span>{stats.totalGems}/{hiddenGems.length} gems collected</span>
               </div>
-            )}
-            {currentPath.length > 0 && (
-              <p className="text-xs text-muted-foreground">
-                Points: {currentPath.length} • Distance: ~{((currentPath.length - 1) * 0.05).toFixed(1)}km
-              </p>
-            )}
+              <div className="text-muted-foreground">
+                {stats.totalRoutes} routes • {stats.totalDistance.toFixed(1)}km total
+              </div>
+            </div>
           </CardContent>
         </Card>
       </div>
 
-      {/* Hidden Gem Details */}
+      {/* Gem Details Panel */}
       {selectedGem && (
-        <div className="absolute bottom-4 left-1/2 transform -translate-x-1/2 z-[1000] w-96 max-w-[90vw]">
-          <Card className="shadow-floating border-0 bg-white/95 backdrop-blur-sm">
-            <CardContent className="p-4">
-              <div className="flex items-start justify-between gap-3">
-                <div className="flex-1">
-                  <div className="flex items-center gap-2 mb-2">
-                    <span className="text-lg">{categoryIcons[selectedGem.category]}</span>
-                    <h3 className="font-semibold text-primary">{selectedGem.name}</h3>
-                    <Badge 
-                      variant="secondary"
-                      style={{ backgroundColor: categoryColors[selectedGem.category] + '20' }}
-                    >
-                      {selectedGem.category}
-                    </Badge>
-                  </div>
-                  <p className="text-sm text-muted-foreground mb-3">
-                    {selectedGem.description}
-                  </p>
-                  <Button 
-                    variant="floating" 
-                    size="sm"
-                    onClick={() => {
-                      map.current?.setView([selectedGem.latitude, selectedGem.longitude], 16, { animate: true });
-                    }}
-                  >
-                    <Navigation className="w-4 h-4" />
-                    Navigate Here
-                  </Button>
-                </div>
-                <Button 
-                  variant="ghost" 
+        <div className="absolute bottom-4 right-4 z-50 max-w-sm">
+          <Card className="bg-background/80 backdrop-blur">
+            <CardHeader className="pb-3">
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-lg flex items-center gap-2">
+                  <span style={{ color: categoryColors[selectedGem.category] }}>
+                    {categoryIcons[selectedGem.category]}
+                  </span>
+                  {selectedGem.name}
+                  {visitedGems.has(selectedGem.id) && (
+                    <Badge variant="secondary" className="ml-2">✨ Visited</Badge>
+                  )}
+                </CardTitle>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {selectedGem.image && (
+                <img 
+                  src={selectedGem.image} 
+                  alt={selectedGem.name}
+                  className="w-full h-32 object-cover rounded-lg"
+                />
+              )}
+              <p className="text-sm text-muted-foreground">
+                {selectedGem.description}
+              </p>
+              <div className="flex items-center gap-2">
+                <Badge 
+                  style={{ backgroundColor: categoryColors[selectedGem.category] }}
+                  className="text-white"
+                >
+                  {selectedGem.category}
+                </Badge>
+                <Button
+                  variant="outline"
                   size="sm"
                   onClick={() => setSelectedGem(null)}
                 >
-                  ✕
+                  Close
                 </Button>
               </div>
             </CardContent>
@@ -452,43 +509,17 @@ const LeafletMap: React.FC = () => {
         </div>
       )}
 
-      {/* Saved Paths Info */}
+      {/* Route Sharing for Latest Route */}
       {savedPaths.length > 0 && (
-        <div className="absolute top-4 right-4 z-[1000] w-64">
-          <Card className="shadow-floating">
-            <CardContent className="p-4">
-              <h3 className="font-semibold text-primary mb-2 flex items-center gap-2">
-                <MapPin className="w-4 h-4" />
-                Saved Routes ({savedPaths.length})
-              </h3>
-              <div className="space-y-1 max-h-32 overflow-y-auto">
-                {savedPaths.slice(-3).map((path) => (
-                  <div key={path.id} className="text-xs text-muted-foreground flex items-center justify-between">
-                    <span>{path.name}</span>
-                    <span>{path.coordinates.length} pts</span>
-                  </div>
-                ))}
-                {savedPaths.length > 3 && (
-                  <div className="text-xs text-muted-foreground/60">
-                    +{savedPaths.length - 3} more routes
-                  </div>
-                )}
-              </div>
-            </CardContent>
-          </Card>
+        <div className="absolute top-20 right-4 z-50">
+          <RouteSharing route={savedPaths[savedPaths.length - 1]} />
         </div>
       )}
 
-      {/* Gems Counter */}
-      <div className="absolute top-20 left-4 z-[1000]">
-        <Card className="shadow-floating">
-          <CardContent className="p-3">
-            <p className="text-sm font-medium text-primary">
-              {filteredGems.length} / {hiddenGems.length} gems visible
-            </p>
-          </CardContent>
-        </Card>
-      </div>
+      {/* Install Prompt */}
+      {isInstallable && !isInstalled && showInstallPrompt && (
+        <InstallPrompt onDismiss={() => setShowInstallPrompt(false)} />
+      )}
     </div>
   );
 };
