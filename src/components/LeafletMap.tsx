@@ -4,7 +4,7 @@ import 'leaflet/dist/leaflet.css';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { MapPin, Play, Square, RotateCcw, Navigation, Award } from 'lucide-react';
+import { MapPin, Play, Square, RotateCcw, Navigation, Award, X } from 'lucide-react';
 import { hiddenGems, categoryColors, categoryIcons, HiddenGem } from '@/data/hiddenGems';
 import CategoryFilter from './CategoryFilter';
 import SearchBar from './SearchBar';
@@ -421,96 +421,130 @@ const LeafletMap: React.FC = () => {
       {/* Map Container */}
       <div ref={mapContainerRef} className="flex-1" />
 
-      {/* Controls Panel */}
+      {/* Controls Panel - Improved UI */}
       <div className="absolute bottom-4 left-4 z-50">
-        <Card className="bg-background/80 backdrop-blur">
-          <CardContent className="p-4 space-y-3">
+        <Card className="bg-background/95 backdrop-blur border shadow-xl">
+          <CardContent className="p-4 space-y-4">
             <div className="flex gap-2">
               <Button
                 onClick={isTracking ? stopTracking : startTracking}
                 variant={isTracking ? "destructive" : "default"}
                 size="sm"
-                className="flex-1"
+                className="flex-1 min-w-20"
               >
                 {isTracking ? (
                   <>
                     <Square className="mr-2 h-4 w-4" />
-                    Stop
+                    Stop Tracking
                   </>
                 ) : (
                   <>
                     <Play className="mr-2 h-4 w-4" />
-                    Track
+                    Start Track
                   </>
                 )}
               </Button>
               
               <Button
-                onClick={() => setCurrentPath([])}
+                onClick={() => {
+                  setCurrentPath([]);
+                  if (currentPathLineRef.current && mapRef.current) {
+                    mapRef.current.removeLayer(currentPathLineRef.current);
+                    currentPathLineRef.current = null;
+                  }
+                }}
                 variant="outline"
                 size="sm"
                 disabled={currentPath.length === 0}
+                title="Clear current path"
               >
                 <RotateCcw className="h-4 w-4" />
               </Button>
             </div>
             
-            {/* Stats */}
-            <div className="space-y-1 text-xs">
+            {/* Enhanced Stats */}
+            <div className="space-y-2 text-sm">
               <div className="flex items-center gap-2">
-                <Award className="h-3 w-3" />
-                <span>{stats.totalGems}/{hiddenGems.length} gems collected</span>
+                <Award className="h-4 w-4 text-primary" />
+                <span className="font-medium">{stats.totalGems}/{hiddenGems.length} gems collected</span>
               </div>
-              <div className="text-muted-foreground">
-                {stats.totalRoutes} routes • {stats.totalDistance.toFixed(1)}km total
+              <div className="grid grid-cols-2 gap-2 text-xs text-muted-foreground">
+                <div>
+                  <span className="font-medium">{stats.totalRoutes}</span> routes
+                </div>
+                <div>
+                  <span className="font-medium">{stats.totalDistance.toFixed(1)}km</span> total
+                </div>
               </div>
+              {isTracking && currentPath.length > 0 && (
+                <div className="text-xs text-primary font-medium">
+                  📍 Tracking active ({currentPath.length} points)
+                </div>
+              )}
             </div>
           </CardContent>
         </Card>
       </div>
 
-      {/* Gem Details Panel */}
+      {/* Gem Details Panel - Improved UI */}
       {selectedGem && (
         <div className="absolute bottom-4 right-4 z-50 max-w-sm">
-          <Card className="bg-background/80 backdrop-blur">
+          <Card className="bg-background/95 backdrop-blur border shadow-xl">
             <CardHeader className="pb-3">
-              <div className="flex items-center justify-between">
-                <CardTitle className="text-lg flex items-center gap-2">
+              <div className="flex items-start justify-between">
+                <CardTitle className="text-lg flex items-center gap-2 flex-1">
                   <span style={{ color: categoryColors[selectedGem.category] }}>
                     {categoryIcons[selectedGem.category]}
                   </span>
-                  {selectedGem.name}
-                  {visitedGems.has(selectedGem.id) && (
-                    <Badge variant="secondary" className="ml-2">✨ Visited</Badge>
-                  )}
+                  <span className="break-words">{selectedGem.name}</span>
                 </CardTitle>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setSelectedGem(null)}
+                  className="ml-2 h-8 w-8 p-0"
+                >
+                  <X className="h-4 w-4" />
+                </Button>
               </div>
+              {visitedGems.has(selectedGem.id) && (
+                <Badge variant="secondary" className="w-fit">✨ Visited</Badge>
+              )}
             </CardHeader>
-            <CardContent className="space-y-3">
+            <CardContent className="space-y-4">
               {selectedGem.image && (
                 <img 
                   src={selectedGem.image} 
                   alt={selectedGem.name}
-                  className="w-full h-32 object-cover rounded-lg"
+                  className="w-full h-40 object-cover rounded-lg"
                 />
               )}
-              <p className="text-sm text-muted-foreground">
-                {selectedGem.description}
-              </p>
-              <div className="flex items-center gap-2">
-                <Badge 
-                  style={{ backgroundColor: categoryColors[selectedGem.category] }}
-                  className="text-white"
-                >
-                  {selectedGem.category}
-                </Badge>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setSelectedGem(null)}
-                >
-                  Close
-                </Button>
+              <div className="space-y-3">
+                <p className="text-sm leading-relaxed text-foreground">
+                  {selectedGem.description}
+                </p>
+                <div className="flex items-center gap-2">
+                  <Badge 
+                    style={{ backgroundColor: categoryColors[selectedGem.category] }}
+                    className="text-white"
+                  >
+                    {selectedGem.category}
+                  </Badge>
+                  {userLocation && (
+                    <Badge variant="outline" className="text-xs">
+                      <MapPin className="h-3 w-3 mr-1" />
+                      {(() => {
+                        const distance = calculateDistance(
+                          userLocation[0], 
+                          userLocation[1], 
+                          selectedGem.latitude, 
+                          selectedGem.longitude
+                        );
+                        return distance < 1 ? `${Math.round(distance * 1000)}m` : `${distance.toFixed(1)}km`;
+                      })()}
+                    </Badge>
+                  )}
+                </div>
               </div>
             </CardContent>
           </Card>
