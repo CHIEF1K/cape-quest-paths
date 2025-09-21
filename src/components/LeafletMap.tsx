@@ -488,8 +488,8 @@ const LeafletMap: React.FC = () => {
 
       {/* Gem Details Panel - Improved UI */}
       {selectedGem && (
-        <div className="absolute bottom-4 right-4 z-50 max-w-sm">
-          <Card className="bg-background/95 backdrop-blur border shadow-xl">
+        <div className="absolute bottom-4 right-4 z-[9999] max-w-sm">
+          <Card className="bg-background border-2 shadow-2xl backdrop-blur-md">
             <CardHeader className="pb-3">
               <div className="flex items-start justify-between">
                 <CardTitle className="text-lg flex items-center gap-2 flex-1">
