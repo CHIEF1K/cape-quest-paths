@@ -71,6 +71,7 @@ const LeafletMap: React.FC = () => {
   }, []);
 
   useEffect(() => {
+    console.log('updateMarkersOnMap effect triggered');
     updateMarkersOnMap();
   }, [selectedCategories, visitedGems]);
 
@@ -168,6 +169,7 @@ const LeafletMap: React.FC = () => {
 
     // Add markers for filtered gems
     gemsToShow.forEach(gem => {
+      console.log('Adding marker for gem:', gem.name, gem.latitude, gem.longitude);
       const isVisited = visitedGems.has(gem.id);
       const icon = createGemIcon(gem.category, isVisited);
       const marker = L.marker([gem.latitude, gem.longitude], { icon })
@@ -176,7 +178,8 @@ const LeafletMap: React.FC = () => {
       (marker as any).isGemMarker = true;
       
       marker.on('click', (e) => {
-        e.originalEvent?.stopPropagation();
+        console.log('Gem clicked:', gem.name);
+        L.DomEvent.stopPropagation(e);
         setSelectedGem(gem);
         if (userLocation) {
           const distance = calculateDistance(userLocation[0], userLocation[1], gem.latitude, gem.longitude);
@@ -387,28 +390,32 @@ const LeafletMap: React.FC = () => {
 
   return (
     <div className="h-screen w-full flex flex-col relative">
-      {/* Header with search */}
-      <div className="absolute top-4 left-4 right-4 z-50 space-y-3">
-        <div className="flex gap-3">
-          <SearchBar 
-            gems={hiddenGems} 
-            onGemSelect={handleGemSelect}
-            userLocation={userLocation}
-          />
+      {/* Header with search - Fixed z-index and positioning */}
+      <div className="absolute top-4 left-4 right-4 z-[1000] space-y-3 pointer-events-none">
+        <div className="flex gap-3 pointer-events-auto">
+          <div className="flex-1">
+            <SearchBar 
+              gems={hiddenGems} 
+              onGemSelect={handleGemSelect}
+              userLocation={userLocation}
+            />
+          </div>
           <Button
             onClick={getUserLocation}
             variant="outline"
             size="icon"
-            className="flex-shrink-0 bg-background/80 backdrop-blur"
+            className="flex-shrink-0 bg-background/90 backdrop-blur border shadow-lg"
           >
             <Navigation className="h-4 w-4" />
           </Button>
         </div>
         
-        <CategoryFilter
-          selectedCategories={selectedCategories}
-          onCategoryToggle={handleCategoryToggle}
-        />
+        <div className="pointer-events-auto">
+          <CategoryFilter
+            selectedCategories={selectedCategories}
+            onCategoryToggle={handleCategoryToggle}
+          />
+        </div>
       </div>
       
       {/* Map Container */}

@@ -18,6 +18,7 @@ const SearchBar: React.FC<SearchBarProps> = ({ gems, onGemSelect, userLocation }
   const [showResults, setShowResults] = useState(false);
 
   useEffect(() => {
+    console.log('SearchBar effect triggered, searchTerm:', searchTerm, 'gems count:', gems.length);
     if (searchTerm.length > 1) {
       const filtered = gems.filter(gem => 
         gem.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -62,6 +63,7 @@ const SearchBar: React.FC<SearchBarProps> = ({ gems, onGemSelect, userLocation }
   };
 
   const handleGemSelect = (gem: HiddenGem) => {
+    console.log('SearchBar gem selected:', gem.name);
     onGemSelect(gem);
     setSearchTerm('');
     setShowResults(false);
@@ -72,23 +74,25 @@ const SearchBar: React.FC<SearchBarProps> = ({ gems, onGemSelect, userLocation }
     setShowResults(false);
   };
 
+  console.log('SearchBar rendering, gems count:', gems.length, 'showResults:', showResults);
+
   return (
     <div className="relative w-full max-w-md">
       <div className="relative">
-        <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground h-4 w-4" />
+        <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground h-4 w-4 z-10" />
         <Input
           type="text"
           placeholder="Search gems by name, category, or location..."
           value={searchTerm}
           onChange={(e) => setSearchTerm(e.target.value)}
-          className="pl-9 pr-8 bg-background/80 backdrop-blur border-border/50"
+          className="pl-9 pr-8 bg-background/95 backdrop-blur border shadow-lg"
         />
         {searchTerm && (
           <Button
             variant="ghost"
             size="sm"
             onClick={clearSearch}
-            className="absolute right-1 top-1/2 transform -translate-y-1/2 h-6 w-6 p-0"
+            className="absolute right-1 top-1/2 transform -translate-y-1/2 h-6 w-6 p-0 z-10"
           >
             <X className="h-3 w-3" />
           </Button>
@@ -96,7 +100,7 @@ const SearchBar: React.FC<SearchBarProps> = ({ gems, onGemSelect, userLocation }
       </div>
 
       {showResults && filteredGems.length > 0 && (
-        <Card className="absolute top-full mt-2 w-full max-h-80 overflow-y-auto z-50 shadow-lg">
+        <Card className="absolute top-full mt-2 w-full max-h-80 overflow-y-auto z-50 shadow-lg bg-background/95 backdrop-blur">
           <div className="p-2">
             {filteredGems.map((gem) => {
               const distance = userLocation 
@@ -143,7 +147,7 @@ const SearchBar: React.FC<SearchBarProps> = ({ gems, onGemSelect, userLocation }
       )}
 
       {showResults && filteredGems.length === 0 && searchTerm.length > 1 && (
-        <Card className="absolute top-full mt-2 w-full z-50 shadow-lg">
+        <Card className="absolute top-full mt-2 w-full z-50 shadow-lg bg-background/95 backdrop-blur">
           <div className="p-4 text-center text-muted-foreground">
             <Search className="h-8 w-8 mx-auto mb-2 opacity-50" />
             <p className="text-sm">No gems found matching "{searchTerm}"</p>
