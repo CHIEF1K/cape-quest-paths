@@ -81,7 +81,7 @@ const SearchBar: React.FC<SearchBarProps> = ({ gems, onGemSelect, userLocation }
           placeholder="Search gems by name, category, or location..."
           value={searchTerm}
           onChange={(e) => setSearchTerm(e.target.value)}
-          className="pl-9 pr-8"
+          className="pl-9 pr-8 bg-background/80 backdrop-blur border-border/50"
         />
         {searchTerm && (
           <Button

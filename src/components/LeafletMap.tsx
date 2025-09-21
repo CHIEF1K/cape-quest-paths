@@ -175,7 +175,8 @@ const LeafletMap: React.FC = () => {
       
       (marker as any).isGemMarker = true;
       
-      marker.on('click', () => {
+      marker.on('click', (e) => {
+        e.originalEvent?.stopPropagation();
         setSelectedGem(gem);
         if (userLocation) {
           const distance = calculateDistance(userLocation[0], userLocation[1], gem.latitude, gem.longitude);
